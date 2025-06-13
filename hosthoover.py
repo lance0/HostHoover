@@ -24,9 +24,9 @@ def is_reachable(host, count=1, timeout=1):
 
 
 def backup_configs(network, username, password, device_type, output_dir, zip_name, command):
-    # Parse network and select first 20 hosts
+    # Parse network and get all hosts in the subnet
     net = ipaddress.ip_network(network, strict=False)
-    hosts = list(net.hosts())[:20]
+    hosts = list(net.hosts())
 
     # Ensure output directory exists
     os.makedirs(output_dir, exist_ok=True)
@@ -76,7 +76,7 @@ def backup_configs(network, username, password, device_type, output_dir, zip_nam
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
-        description="Backup running-config from first 20 hosts in a /24, skipping unreachable hosts, naming by hostname, and zip them."
+        description="Backup running-config from all reachable hosts in a subnet, naming files by hostname, and zip them."
     )
     parser.add_argument('network', help='Network in CIDR notation, e.g., 192.168.1.0/24')
     parser.add_argument('-u', '--username', required=True, help='SSH username')
