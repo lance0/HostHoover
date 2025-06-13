@@ -45,3 +45,20 @@ python3 hosthoover.py 192.168.1.0/24 -u admin -p password
 
 The script processes the hosts in the `/24` network and stores the results in the specified output directory.
 At the end, a brief summary lists which hosts succeeded or failed.
+
+## Supported Device Types
+
+HostHoover relies on [Netmiko](https://github.com/ktbyers/netmiko), which
+supports a large number of network device platforms. To see the complete list of
+supported device types on your system, run the following Python snippet:
+
+```bash
+python - <<'EOF'
+from netmiko.ssh_dispatcher import CLASS_MAPPER
+for device_type in sorted(CLASS_MAPPER):
+    print(device_type)
+EOF
+```
+
+Refer to the Netmiko documentation for details on each device type and any
+special configuration that may be required.
