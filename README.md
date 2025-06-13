@@ -8,6 +8,7 @@ HostHoover is a Python 3 utility that collects running configuration files from 
 - Connects over SSH using [Netmiko](https://github.com/ktbyers/netmiko).
 - Saves each configuration to a file named after the device hostname.
 - Creates a ZIP archive containing all collected configuration files.
+- Works on Linux and Windows thanks to a cross-platform ping check.
 
 ## Requirements
 
@@ -25,6 +26,7 @@ pip install -r requirements.txt
 ```bash
 python3 hosthoover.py <network_cidr> -u <username> -p <password> [options]
 ```
+You can also set credentials via the `SSH_USERNAME` and `SSH_PASSWORD` environment variables instead of using `-u` and `-p`.
 
 Common options:
 
@@ -32,6 +34,8 @@ Common options:
 - `-o`, `--output`       Directory to save configs (default: `configs`)
 - `-z`, `--zip-name`     Name of the zip file (default: `configs.zip`)
 - `-c`, `--command`      CLI command to run (default: `show running-config`)
+- `--ping-count`         Number of ping attempts before giving up (default: `1`)
+- `--ping-timeout`       Ping timeout in seconds (default: `1`)
 
 Example:
 
@@ -40,3 +44,4 @@ python3 hosthoover.py 192.168.1.0/24 -u admin -p password
 ```
 
 The script processes the hosts in the `/24` network and stores the results in the specified output directory.
+At the end, a brief summary lists which hosts succeeded or failed.
