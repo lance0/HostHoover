@@ -68,5 +68,6 @@ Common device type names for the `--device-type` option include:
 - `cisco_xr` - Cisco IOS-XR routers
 - `juniper_junos` - Juniper Junos platforms
 
+
 Refer to the Netmiko documentation for details on each device type and any
 special configuration that may be required.
