@@ -39,4 +39,4 @@ Example:
 python3 hosthoover.py 192.168.1.0/24 -u admin -p password
 ```
 
-The script processes the first 20 hosts in the `/24` network and stores the results in the specified output directory.
+The script processes the hosts in the `/24` network and stores the results in the specified output directory.
