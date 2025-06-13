@@ -59,6 +59,16 @@ for device_type in sorted(CLASS_MAPPER):
     print(device_type)
 EOF
 ```
+ 
+Common device type names for the `--device-type` option include:
+
+- `aruba_os` - ArubaOS switches and controllers
+- `cisco_ios` - Cisco IOS / IOS XE devices
+- `cisco_nxos` - Cisco NX-OS (Nexus) devices
+- `cisco_xr` - Cisco IOS-XR routers
+- `juniper_junos` - Juniper Junos platforms
+=======
+
 
 Refer to the Netmiko documentation for details on each device type and any
 special configuration that may be required.
