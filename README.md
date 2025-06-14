@@ -18,9 +18,15 @@
 
 ## Quick Start
 
-### 1. Install Requirements
+### 1a. Install Core Dependencies
 
 ```pip install netmiko pyyaml```
+
+OR
+
+### 1b. Install All Dependencies
+
+```pip install -r requirements.txt```
 
 ### 2. Prepare Your Config File (optional)
 
