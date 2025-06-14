@@ -1,5 +1,5 @@
 """
-HostHoover v2.3 - Network Configuration Backup Tool with Hostname Support
+HostHoover - Network Configuration Backup Tool with Hostname Support
 """
 
 import argparse
@@ -51,13 +51,13 @@ DEFAULT_CONFIG = {
 def load_config(args: argparse.Namespace) -> Dict:
     """Load configuration from YAML file and merge with CLI args"""
     config = DEFAULT_CONFIG.copy()
-    if args.config:
+    if getattr(args, 'config', None):
         with open(args.config) as f:
             file_config = yaml.safe_load(f)
             if file_config:
                 config.update(file_config)
     # CLI args override config file
-    for key in ['username', 'password', 'device_type', 'subnet', 
+    for key in ['username', 'password', 'device_type', 'subnet',
                 'output_dir', 'ssh_key', 'archive_format']:
         if getattr(args, key, None):
             config[key] = getattr(args, key)
@@ -129,7 +129,7 @@ def backup_device(device: Dict) -> Optional[Dict]:
         conn_params['key_file'] = device['ssh_key']
     else:
         conn_params['password'] = device['password']
-    
+
     try:
         with ConnectHandler(**conn_params) as conn:
             hostname = get_hostname(conn, device['device_type'])
@@ -150,10 +150,10 @@ def process_device(config: Dict, ip: str) -> Dict:
         'device_type': config['device_type'],
         'ssh_key': config['ssh_key']
     }
-    
+
     result = {'ip': ip, 'status': 'success'}
     backup_data = backup_device(device)
-    
+
     if not backup_data or not backup_data.get('config'):
         result['status'] = 'failed'
         if config.get('smtp'):
@@ -167,7 +167,7 @@ def process_device(config: Dict, ip: str) -> Dict:
     safe_name = re.sub(r'[^\w-]', '_', hostname).strip('_')
     timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
     filename = f"{config['output_dir']}/{safe_name}_{timestamp}.cfg"
-    
+
     try:
         Path(config['output_dir']).mkdir(exist_ok=True)
         with open(filename, 'w') as f:
@@ -176,17 +176,17 @@ def process_device(config: Dict, ip: str) -> Dict:
         logger.error(f"File write failed: {e}")
         result['status'] = 'write_error'
         return result
-    
+
     if config.get('git'):
         git_commit(filename, f"Backup {safe_name} ({ip}) {timestamp}")
-    
+
     return result
 
 def create_archive(output_dir: str, format: str) -> str:
     """Create compressed archive of backup files"""
     timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
     archive_base = f"{output_dir}/hosthoover_backup_{timestamp}"
-    
+
     try:
         if format == 'zip':
             archive_path = f"{archive_base}.zip"
@@ -194,7 +194,7 @@ def create_archive(output_dir: str, format: str) -> str:
                 for file in Path(output_dir).glob('*.cfg'):
                     zipf.write(file, arcname=file.name)
             return archive_path
-        
+
         elif format == '7z':
             if not py7zr:
                 raise RuntimeError("py7zr module required for 7z support")
@@ -203,7 +203,7 @@ def create_archive(output_dir: str, format: str) -> str:
                 for file in Path(output_dir).glob('*.cfg'):
                     z7f.write(file, arcname=file.name)
             return archive_path
-        
+
         elif format == 'rar':
             archive_path = f"{archive_base}.rar"
             rar_cmd = ['rar', 'a', '-ep1', archive_path, f"{output_dir}/*.cfg"]
@@ -211,48 +211,58 @@ def create_archive(output_dir: str, format: str) -> str:
             if result.returncode != 0:
                 raise RuntimeError(f"RAR failed: {result.stderr}")
             return archive_path
-        
+
         else:
             raise ValueError(f"Unsupported format: {format}")
     except Exception as e:
         logger.error(f"Archive creation failed: {e}")
         raise
 
-def main():
-    parser = argparse.ArgumentParser(description="HostHoveryour_config = load_config(args)
-    
+def run_hosthoover(config: dict):
+    """Callable entry point for GUI or scripting"""
     if not config['username'] or not (config['password'] or config['ssh_key']):
-        logger.error("Missing authentication credentials")
-        sys.exit(1)
-    
+        raise ValueError("Missing authentication credentials")
     if not config['password'] and not config['ssh_key']:
         config['password'] = getpass(prompt='SSH Password: ')
-    
     ips = generate_ips(config['subnet'])
     results = {'success': 0, 'failed': 0, 'write_error': 0}
-    
-    with ThreadPoolExecutor(max_workers=config['max_workers']) as executor:
+    with ThreadPoolExecutor(max_workers=int(config.get('max_workers', 15))) as executor:
         futures = [executor.submit(process_device, config, ip) for ip in ips]
-        
         for future in as_completed(futures):
             result = future.result()
             status = result['status']
-            results[status] += 1
+            results[status] = results.get(status, 0) + 1
             logger.info(f"{result['ip']}: {status.upper()}")
-    
-    # Create archive
+    archive_path = create_archive(config['output_dir'], config['archive_format'])
+    logger.info(f"Created {config['archive_format'].upper()} archive: {archive_path}")
+    return results, archive_path
+
+def main():
+    parser = argparse.ArgumentParser(description="HostHoover - Network Configuration Backup Tool")
+    parser.add_argument('--config', help='Configuration YAML file')
+    parser.add_argument('-u', '--username', help='SSH username')
+    parser.add_argument('-p', '--password', help='SSH password')
+    parser.add_argument('-k', '--ssh-key', help='SSH private key path')
+    parser.add_argument('-d', '--device-type', help='Netmiko device type')
+    parser.add_argument('-s', '--subnet', help='Network subnet')
+    parser.add_argument('-o', '--output-dir', help='Output directory')
+    parser.add_argument('--archive-format', help='Archive format: zip, 7z, or rar')
+    args = parser.parse_args()
+
+    config = load_config(args)
+
     try:
-        archive_path = create_archive(config['output_dir'], config['archive_format'])
-        logger.info(f"Created {config['archive_format'].upper()} archive: {archive_path}")
+        results, archive_path = run_hosthoover(config)
     except Exception as e:
-        logger.error(f"Archive creation failed: {e}")
+        logger.error(f"Backup failed: {e}")
         sys.exit(1)
-    
+
     # Print summary
     print("\nBackup Summary:")
-    print(f"Successful: {results['success']}")
-    print(f"Failed: {results['failed']}")
+    print(f"Successful: {results.get('success', 0)}")
+    print(f"Failed: {results.get('failed', 0)}")
     print(f"Write Errors: {results.get('write_error', 0)}")
+    print(f"Archive: {archive_path}")
 
 if __name__ == "__main__":
     main()
