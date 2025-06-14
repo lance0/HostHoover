@@ -40,7 +40,7 @@ Using a config file
 
 Or override config file with CLI arguments
 
-```python hosthoover.py --subnet 10.0.0.0/24 -u admin -k ~/.ssh/id_rsa```
+```python hosthoover.py --subnet 192.168.1.0/24 -u admin -k ~/.ssh/id_rsa --archive-format zip```
 
 ---
 
