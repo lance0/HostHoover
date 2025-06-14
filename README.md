@@ -1,72 +1,183 @@
 # HostHoover
 
-HostHoover is a Python 3 utility that collects running configuration files from network devices and archives them.
+**Automated, Parallel Network Configuration Backup Tool**
+
+---
 
 ## Features
 
-- Pings each host in the provided subnet and skips unreachable devices.
-- Connects over SSH using [Netmiko](https://github.com/ktbyers/netmiko).
-- Saves each configuration to a file named after the device hostname.
-- Creates a ZIP archive containing all collected configuration files.
-- Works on Linux and Windows thanks to a cross-platform ping check.
+- ⚡ **Parallel Backups:** Fast, multi-threaded configuration collection across large networks.
+- 🗂️ **Subnet Support:** Accurate IP address generation using Python’s `ipaddress` module.
+- 🔑 **SSH Key & Password Auth:** Use SSH keys or passwords for device authentication.
+- 🛠️ **Flexible Configuration:** Centralized YAML config file, with CLI override support.
+- 📧 **Email Alerts:** SMTP notifications for failed backups.
+- 🗃️ **Version Control:** Optional Git integration for automatic config tracking.
+- 📁 **Organized Output:** Timestamped backups, organized per device.
+
+---
+
+## Quick Start
+
+### 1a. Install Core Dependencies
+
+```pip install netmiko pyyaml```
+
+OR
+
+### 1b. Install All Dependencies
+
+```pip install -r requirements.txt```
+
+### 2. Prepare Your Config File (optional)
+
+Create a `config.yaml` (see example below).
+
+### 3. Run HostHoover
+
+Using a config file
+
+```python hosthoover.py --config config.yaml```
+
+Or override config file with CLI arguments
+
+```python hosthoover.py --subnet 192.168.1.0/24 -u admin -k ~/.ssh/id_rsa --archive-format zip```
+
+Or for a GUI 
+
+```python hosthoover_gui.py```
+
+
+---
+
+## Example `config.yaml`
+```
+# HostHoover Configuration File
+
+# SSH authentication
+username: admin
+password: your_password_here        # Optional if using ssh_key
+ssh_key: /home/admin/.ssh/id_rsa    # Optional, use instead of password
+
+# Device type (Netmiko)
+device_type: cisco_ios              # Example: cisco_ios, arista_eos, etc.
+
+# Subnet to scan (CIDR notation)
+subnet: 192.168.1.0/24
+
+# Output directory for backups
+output_dir: ./backups
+
+# Number of parallel threads (default: 15)
+max_workers: 20
+
+# Archive format: zip (default), 7z, or rar
+archive_format: zip
+
+# Enable Git integration for version tracking (true/false)
+git: true
+
+# SMTP settings for email notifications (optional)
+smtp:
+  server: smtp.example.com
+  port: 587
+  sender: backups@example.com
+  recipient: admin@example.com
+  username: smtp_user
+  password: smtp_pass
+
+# --- End of config.yaml ---
+
+```
+---
+
+## Command-Line Arguments
+
+| Argument         | Description                                | Example                          |
+|------------------|--------------------------------------------|----------------------------------|
+| `--config`       | Path to YAML configuration file            | `--config config.yaml`           |
+| `-u`, `--username` | SSH username                             | `-u admin`                       |
+| `-p`, `--password` | SSH password                             | `-p mypass`                      |
+| `-k`, `--ssh-key`  | SSH private key path                     | `-k ~/.ssh/id_rsa`               |
+| `-d`, `--device-type` | Netmiko device type                   | `-d cisco_ios`                   |
+| `-s`, `--subnet`     | Network subnet (CIDR)                  | `-s 10.0.0.0/24`                 |
+| `-o`, `--output-dir` | Output directory for backups            | `-o ./backups`                   |
+
+*CLI arguments override config file settings.*
+
+---
+
+## Output
+
+- Each device’s config is saved as:  
+  `output_dir/device_ip_YYYYMMDD-HHMMSS.cfg`
+- If enabled, every backup is auto-committed to the local Git repo.
+- Failed backups trigger an email alert if SMTP is configured.
+
+---
+## Archive Formats
+
+HostHoover supports three compression formats:
+
+| Format | Requirements                          | Notes                              |
+|--------|---------------------------------------|------------------------------------|
+| ZIP    | Built-in                              | Default format, cross-platform     |
+| 7Z     | `pip install py7zr`                   | Better compression ratio           |
+| RAR    | Install [RARLAB](https://www.rarlab.com/) | Proprietary format, Windows-first |
+
+Configure in `config.yaml`:
 
 ## Requirements
 
-- Python 3.8 or higher
-- `netmiko` Python package
+- Python 3.7+
+- [Netmiko](https://github.com/ktbyers/netmiko)
+- [PyYAML](https://pyyaml.org/)
 
-Install the dependencies with:
+---
 
-```bash
-pip install -r requirements.txt
-```
+## Best Practices
 
-## Usage
+- Use SSH keys for authentication where possible.
+- Store your config file securely and restrict permissions.
+- Set up your Git repository before enabling version control.
+- Use environment variables or a secrets manager for SMTP credentials in production.
 
-```bash
-python3 hosthoover.py <network_cidr> -u <username> -p <password> [options]
-```
-You can also set credentials via the `SSH_USERNAME` and `SSH_PASSWORD` environment variables instead of using `-u` and `-p`.
+---
 
-Common options:
+## Example Usage
 
-- `-d`, `--device-type`  Netmiko device type (default: `cisco_ios`)
-- `-o`, `--output`       Directory to save configs (default: `configs`)
-- `-z`, `--zip-name`     Name of the zip file (default: `configs.zip`)
-- `-c`, `--command`      CLI command to run (default: `show running-config`)
-- `--ping-count`         Number of ping attempts before giving up (default: `1`)
-- `--ping-timeout`       Ping timeout in seconds (default: `1`)
+Backup all devices in a subnet using SSH key authentication
 
-Example:
+```python hosthoover.py --subnet 10.0.1.0/24 -u netadmin -k ~/.ssh/id_rsa```
 
-```bash
-python3 hosthoover.py 192.168.1.0/24 -u admin -p password
-```
+Use a YAML config file for all settings
 
-The script processes the hosts in the `/24` network and stores the results in the specified output directory.
-At the end, a brief summary lists which hosts succeeded or failed.
+```python hosthoover.py --config config.yaml```
 
-## Supported Device Types
+---
 
-HostHoover relies on [Netmiko](https://github.com/ktbyers/netmiko), which
-supports a large number of network device platforms. To see the complete list of
-supported device types on your system, run the following Python snippet:
+## Troubleshooting
 
-```bash
-python - <<'EOF'
-from netmiko.ssh_dispatcher import CLASS_MAPPER
-for device_type in sorted(CLASS_MAPPER):
-    print(device_type)
-EOF
-```
- 
-Common device type names for the `--device-type` option include:
+- **Authentication errors:** Double-check your username, password, or SSH key path.
+- **Subnet errors:** Ensure your subnet is valid (e.g., `192.168.1.0/24`).
+- **SMTP issues:** Verify your SMTP server, port, and credentials.
+- **Git errors:** Make sure your output directory is a Git repository (`git init`).
 
-- `aruba_os` - ArubaOS switches and controllers
-- `cisco_ios` - Cisco IOS / IOS XE devices
-- `cisco_nxos` - Cisco NX-OS (Nexus) devices
-- `cisco_xr` - Cisco IOS-XR routers
-- `juniper_junos` - Juniper Junos platforms
+---
 
-Refer to the Netmiko documentation for details on each device type and any
-special configuration that may be required.
+## License
+
+MIT License
+
+---
+
+## Credits
+
+- Built with [Netmiko](https://github.com/ktbyers/netmiko)
+- Inspired by network automation best practices
+
+---
+
+## Contributing
+
+Pull requests and suggestions are welcome! Please open an issue or submit a PR.
+

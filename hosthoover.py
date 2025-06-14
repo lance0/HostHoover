@@ -1,137 +1,268 @@
-#!/usr/bin/env python3
+"""
+HostHoover - Network Configuration Backup Tool with Hostname Support
+"""
 
 import argparse
 import ipaddress
+import logging
 import os
-import zipfile
 import re
+import smtplib
 import subprocess
-import platform
-from netmiko import ConnectHandler, NetmikoTimeoutException, NetmikoAuthenticationException
+import sys
+import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+from email.mime.text import MIMEText
+from getpass import getpass
+from pathlib import Path
+from typing import Dict, List, Optional
 
+import yaml
+from netmiko import ConnectHandler
+from netmiko.ssh_exception import NetmikoAuthenticationException, NetmikoTimeoutException
 
-def is_reachable(host, count=1, timeout=1):
-    """Ping a host to check reachability in a cross-platform way."""
-    system = platform.system().lower()
-    if system == 'windows':
-        # Windows ping uses milliseconds for timeout
-        cmd = ["ping", "-n", str(count), "-w", str(timeout * 1000), host]
-    else:
-        cmd = ["ping", "-c", str(count), "-W", str(timeout), host]
+try:
+    import py7zr
+except ImportError:
+    py7zr = None
 
+# Configure logging
+logging.basicConfig(
+    format='%(asctime)s | %(levelname)-8s | %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+DEFAULT_CONFIG = {
+    'username': None,
+    'password': None,
+    'device_type': 'cisco_ios',
+    'subnet': '192.168.1.0/24',
+    'output_dir': 'backups',
+    'max_workers': 15,
+    'smtp': None,
+    'git': False,
+    'ssh_key': None,
+    'archive_format': 'zip'
+}
+
+def load_config(args: argparse.Namespace) -> Dict:
+    """Load configuration from YAML file and merge with CLI args"""
+    config = DEFAULT_CONFIG.copy()
+    if getattr(args, 'config', None):
+        with open(args.config) as f:
+            file_config = yaml.safe_load(f)
+            if file_config:
+                config.update(file_config)
+    # CLI args override config file
+    for key in ['username', 'password', 'device_type', 'subnet',
+                'output_dir', 'ssh_key', 'archive_format']:
+        if getattr(args, key, None):
+            config[key] = getattr(args, key)
+    return config
+
+def generate_ips(subnet: str) -> List[str]:
+    """Generate IP list from subnet using ipaddress module"""
     try:
-        subprocess.run(
-            cmd,
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
+        network = ipaddress.ip_network(subnet, strict=False)
+        return [str(host) for host in network.hosts()]
+    except ValueError as e:
+        logger.error(f"Invalid subnet: {e}")
+        sys.exit(1)
+
+def send_email(smtp_config: Dict, subject: str, body: str) -> bool:
+    """Send email notification using SMTP configuration"""
+    msg = MIMEText(body)
+    msg['Subject'] = subject
+    msg['From'] = smtp_config['sender']
+    msg['To'] = smtp_config['recipient']
+    try:
+        with smtplib.SMTP(smtp_config['server'], smtp_config['port']) as server:
+            server.starttls()
+            server.login(smtp_config['username'], smtp_config['password'])
+            server.send_message(msg)
         return True
-    except subprocess.CalledProcessError:
+    except Exception as e:
+        logger.error(f"Email send failed: {e}")
         return False
 
+def git_commit(file_path: str, message: str) -> bool:
+    """Commit file to git repository"""
+    try:
+        subprocess.run(['git', 'add', file_path], check=True)
+        subprocess.run(['git', 'commit', '-m', message], check=True)
+        return True
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Git commit failed: {e}")
+        return False
 
-def backup_configs(network, username, password, device_type, output_dir,
-                   zip_name, command, ping_count=1, ping_timeout=1):
-    # Parse network and get all hosts in the subnet
-    net = ipaddress.ip_network(network, strict=False)
-    hosts = list(net.hosts())
+def get_hostname(conn, device_type: str) -> Optional[str]:
+    """Retrieve and sanitize hostname from network device"""
+    try:
+        if device_type.startswith('cisco'):
+            output = conn.send_command("show running-config | include ^hostname")
+            match = re.search(r'hostname\s+(\S+)', output)
+            return match.group(1) if match else None
+        elif device_type.startswith('arista'):
+            output = conn.send_command("show hostname")
+            return output.strip() if output else None
+        # Add more device patterns as needed
+        else:
+            output = conn.send_command("show hostname")
+            match = re.search(r'hostname\s+"?(\S+)"?', output)
+            return match.group(1) if match else None
+    except Exception as e:
+        logger.error(f"Hostname retrieval failed: {e}")
+        return None
 
-    # Ensure output directory exists
-    os.makedirs(output_dir, exist_ok=True)
+def backup_device(device: Dict) -> Optional[Dict]:
+    """Execute backup command and retrieve hostname/config"""
+    conn_params = {
+        'device_type': device['device_type'],
+        'host': device['ip'],
+        'username': device['username'],
+    }
+    if device['ssh_key']:
+        conn_params['use_keys'] = True
+        conn_params['key_file'] = device['ssh_key']
+    else:
+        conn_params['password'] = device['password']
 
-    successes = []
-    failures = []
+    try:
+        with ConnectHandler(**conn_params) as conn:
+            hostname = get_hostname(conn, device['device_type'])
+            config = conn.send_command('show running-config')
+            return {'hostname': hostname, 'config': config}
+    except (NetmikoAuthenticationException, NetmikoTimeoutException) as e:
+        logger.error(f"Connection failed to {device['ip']}: {e}")
+    except Exception as e:
+        logger.error(f"Unexpected error with {device['ip']}: {e}")
+    return None
 
-    for ip in hosts:
-        host = str(ip)
-        # Skip if host is unreachable
-        if not is_reachable(host, count=ping_count, timeout=ping_timeout):
-            print(f"{host} is unreachable, skipping.")
-            failures.append(host)
-            continue
+def process_device(config: Dict, ip: str) -> Dict:
+    """Process single device with hostname-based filename"""
+    device = {
+        'ip': ip,
+        'username': config['username'],
+        'password': config['password'],
+        'device_type': config['device_type'],
+        'ssh_key': config['ssh_key']
+    }
 
-        device_params = {
-            'device_type': device_type,
-            'host': host,
-            'username': username,
-            'password': password,
-        }
-        try:
-            print(f"Connecting to {host}...")
-            connection = ConnectHandler(**device_params)
-            cmd = command if command else 'show running-config'
-            print(f"Running command: {cmd}")
-            config = connection.send_command(cmd)
+    result = {'ip': ip, 'status': 'success'}
+    backup_data = backup_device(device)
 
-            # Extract hostname from running-config, fallback to IP
-            match = re.search(r'^hostname\s+(\S+)', config, re.MULTILINE)
-            filename_base = match.group(1) if match else host
+    if not backup_data or not backup_data.get('config'):
+        result['status'] = 'failed'
+        if config.get('smtp'):
+            send_email(config['smtp'],
+                      f"Backup Failed - {ip}",
+                      f"Failed to backup device {ip}")
+        return result
 
-            # Save running config to file named after hostname
-            filename = os.path.join(output_dir, f"{filename_base}.cfg")
-            with open(filename, 'w') as file:
-                file.write(config)
-            print(f"Config saved: {filename}")
-            connection.disconnect()
-            successes.append(host)
+    # Sanitize hostname for filename
+    hostname = backup_data.get('hostname', ip)
+    safe_name = re.sub(r'[^\w-]', '_', hostname).strip('_')
+    timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    filename = f"{config['output_dir']}/{safe_name}_{timestamp}.cfg"
 
-        except (NetmikoTimeoutException, NetmikoAuthenticationException) as error:
-            print(f"Failed for {host}: {error}")
-            failures.append(host)
+    try:
+        Path(config['output_dir']).mkdir(exist_ok=True)
+        with open(filename, 'w') as f:
+            f.write(backup_data['config'])
+    except IOError as e:
+        logger.error(f"File write failed: {e}")
+        result['status'] = 'write_error'
+        return result
 
-    # Create zip archive of all .cfg files
-    zip_path = os.path.join(output_dir, zip_name)
-    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-        for cfg_file in os.listdir(output_dir):
-            if cfg_file.endswith('.cfg'):
-                zipf.write(os.path.join(output_dir, cfg_file), cfg_file)
-    print(f"All configs zipped into {zip_path}")
+    if config.get('git'):
+        git_commit(filename, f"Backup {safe_name} ({ip}) {timestamp}")
 
-    # Print summary of results
-    print("\nSummary:")
-    print(f"  Successful: {len(successes)}")
-    if successes:
-        print("    " + ", ".join(successes))
-    print(f"  Failed/Skipped: {len(failures)}")
-    if failures:
-        print("    " + ", ".join(failures))
+    return result
 
+def create_archive(output_dir: str, format: str) -> str:
+    """Create compressed archive of backup files"""
+    timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    archive_base = f"{output_dir}/hosthoover_backup_{timestamp}"
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(
-        description="Backup running-config from all reachable hosts in a subnet, naming files by hostname, and zip them."
-    )
-    parser.add_argument('network', help='Network in CIDR notation, e.g., 192.168.1.0/24')
-    parser.add_argument(
-        '-u', '--username',
-        default=os.getenv('SSH_USERNAME'),
-        help='SSH username (or set SSH_USERNAME env var)'
-    )
-    parser.add_argument(
-        '-p', '--password',
-        default=os.getenv('SSH_PASSWORD'),
-        help='SSH password (or set SSH_PASSWORD env var)'
-    )
-    parser.add_argument('-d', '--device-type', default='cisco_ios', help='Netmiko device type (default: cisco_ios)')
-    parser.add_argument('-o', '--output', default='configs', help='Directory to save configs (default: configs)')
-    parser.add_argument('-z', '--zip-name', default='configs.zip', help='Name of the zip file (default: configs.zip)')
-    parser.add_argument('-c', '--command', help="CLI command to run (default: 'show running-config')")
-    parser.add_argument('--ping-count', type=int, default=1, help='Number of ping attempts (default: 1)')
-    parser.add_argument('--ping-timeout', type=int, default=1, help='Ping timeout in seconds (default: 1)')
+    try:
+        if format == 'zip':
+            archive_path = f"{archive_base}.zip"
+            with zipfile.ZipFile(archive_path, 'w') as zipf:
+                for file in Path(output_dir).glob('*.cfg'):
+                    zipf.write(file, arcname=file.name)
+            return archive_path
+
+        elif format == '7z':
+            if not py7zr:
+                raise RuntimeError("py7zr module required for 7z support")
+            archive_path = f"{archive_base}.7z"
+            with py7zr.SevenZipFile(archive_path, 'w') as z7f:
+                for file in Path(output_dir).glob('*.cfg'):
+                    z7f.write(file, arcname=file.name)
+            return archive_path
+
+        elif format == 'rar':
+            archive_path = f"{archive_base}.rar"
+            rar_cmd = ['rar', 'a', '-ep1', archive_path, f"{output_dir}/*.cfg"]
+            result = subprocess.run(rar_cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                raise RuntimeError(f"RAR failed: {result.stderr}")
+            return archive_path
+
+        else:
+            raise ValueError(f"Unsupported format: {format}")
+    except Exception as e:
+        logger.error(f"Archive creation failed: {e}")
+        raise
+
+def run_hosthoover(config: dict):
+    """Callable entry point for GUI or scripting"""
+    if not config['username'] or not (config['password'] or config['ssh_key']):
+        raise ValueError("Missing authentication credentials")
+    if not config['password'] and not config['ssh_key']:
+        config['password'] = getpass(prompt='SSH Password: ')
+    ips = generate_ips(config['subnet'])
+    results = {'success': 0, 'failed': 0, 'write_error': 0}
+    with ThreadPoolExecutor(max_workers=int(config.get('max_workers', 15))) as executor:
+        futures = [executor.submit(process_device, config, ip) for ip in ips]
+        for future in as_completed(futures):
+            result = future.result()
+            status = result['status']
+            results[status] = results.get(status, 0) + 1
+            logger.info(f"{result['ip']}: {status.upper()}")
+    archive_path = create_archive(config['output_dir'], config['archive_format'])
+    logger.info(f"Created {config['archive_format'].upper()} archive: {archive_path}")
+    return results, archive_path
+
+def main():
+    parser = argparse.ArgumentParser(description="HostHoover - Network Configuration Backup Tool")
+    parser.add_argument('--config', help='Configuration YAML file')
+    parser.add_argument('-u', '--username', help='SSH username')
+    parser.add_argument('-p', '--password', help='SSH password')
+    parser.add_argument('-k', '--ssh-key', help='SSH private key path')
+    parser.add_argument('-d', '--device-type', help='Netmiko device type')
+    parser.add_argument('-s', '--subnet', help='Network subnet')
+    parser.add_argument('-o', '--output-dir', help='Output directory')
+    parser.add_argument('--archive-format', help='Archive format: zip, 7z, or rar')
     args = parser.parse_args()
 
-    if not args.username or not args.password:
-        parser.error('SSH username and password required via options or environment variables')
+    config = load_config(args)
 
-    backup_configs(
-        args.network,
-        args.username,
-        args.password,
-        args.device_type,
-        args.output,
-        args.zip_name,
-        args.command,
-        ping_count=args.ping_count,
-        ping_timeout=args.ping_timeout
-    )
+    try:
+        results, archive_path = run_hosthoover(config)
+    except Exception as e:
+        logger.error(f"Backup failed: {e}")
+        sys.exit(1)
+
+    # Print summary
+    print("\nBackup Summary:")
+    print(f"Successful: {results.get('success', 0)}")
+    print(f"Failed: {results.get('failed', 0)}")
+    print(f"Write Errors: {results.get('write_error', 0)}")
+    print(f"Archive: {archive_path}")
+
+if __name__ == "__main__":
+    main()

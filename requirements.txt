@@ -1,1 +1,12 @@
-netmiko
+# Core dependencies
+netmiko>=4.1.0
+pyyaml>=6.0
+
+# Optional: 7z archive support
+py7zr>=0.20.6
+
+# Optional: Testing framework
+pytest>=7.0.0
+
+# No extra package needed for smtplib, email, pathlib, ipaddress, zipfile, argparse, logging, getpass, subprocess
+# (these are all included in the Python standard library for Python 3.7+)
