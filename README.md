@@ -42,27 +42,51 @@ Or override config file with CLI arguments
 
 ```python hosthoover.py --subnet 192.168.1.0/24 -u admin -k ~/.ssh/id_rsa --archive-format zip```
 
+Or for a GUI 
+
+```python hosthoover_gui.py```
+
+
 ---
 
 ## Example `config.yaml`
 ```
+# HostHoover Configuration File
+
+# SSH authentication
 username: admin
-password: your_password # Optional if using SSH key
-ssh_key: ~/.ssh/id_rsa # Optional, use instead of password
-device_type: cisco_ios
+password: your_password_here        # Optional if using ssh_key
+ssh_key: /home/admin/.ssh/id_rsa    # Optional, use instead of password
+
+# Device type (Netmiko)
+device_type: cisco_ios              # Example: cisco_ios, arista_eos, etc.
+
+# Subnet to scan (CIDR notation)
 subnet: 192.168.1.0/24
+
+# Output directory for backups
 output_dir: ./backups
+
+# Number of parallel threads (default: 15)
 max_workers: 20
 
-smtp:
-server: smtp.example.com
-port: 587
-sender: backups@example.com
-recipient: admin@example.com
-username: smtp_user
-password: smtp_pass
+# Archive format: zip (default), 7z, or rar
+archive_format: zip
 
+# Enable Git integration for version tracking (true/false)
 git: true
+
+# SMTP settings for email notifications (optional)
+smtp:
+  server: smtp.example.com
+  port: 587
+  sender: backups@example.com
+  recipient: admin@example.com
+  username: smtp_user
+  password: smtp_pass
+
+# --- End of config.yaml ---
+
 ```
 ---
 
