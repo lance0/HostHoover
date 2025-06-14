@@ -84,6 +84,17 @@ git: true
 - Failed backups trigger an email alert if SMTP is configured.
 
 ---
+## Archive Formats
+
+HostHoover supports three compression formats:
+
+| Format | Requirements                          | Notes                              |
+|--------|---------------------------------------|------------------------------------|
+| ZIP    | Built-in                              | Default format, cross-platform     |
+| 7Z     | `pip install py7zr`                   | Better compression ratio           |
+| RAR    | Install [RARLAB](https://www.rarlab.com/) | Proprietary format, Windows-first |
+
+Configure in `config.yaml`:
 
 ## Requirements
 
